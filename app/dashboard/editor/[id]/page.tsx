@@ -4,118 +4,140 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 
-// ⚠️ ВАЖНО: подстрой импорт под твой проект.
-// У тебя в lib точно есть supabase-клиент. Если файл называется иначе — поменяй 1 строку.
-import { supabase } from "@/lib/supabase"; // <- если у тебя другой путь/экспорт, поправь тут
+// ✅ Поменяй импорт, если у тебя supabase клиент в другом месте
+import { supabase } from "@/lib/supabase"; // <-- если ошибка, скажи как у тебя называется файл/экспорт
 
 type BlockType = "button" | "text" | "image" | "divider" | "map";
 type Align = "left" | "center" | "right";
 
-type Taplink = {
+type Page = {
   id: string;
-  name?: string;
-  slug?: string;
+  title?: string | null;
+  slug?: string | null;
   avatar_url?: string | null;
   banner_url?: string | null;
 };
 
-type TaplinkBlock = {
+type BlockRow = {
   id: string;
-  taplink_id: string;
-  type: BlockType;
-  order: number;
-  data: any;
+  page_id: string;
+  type: string;
+  title: string | null;
+  value: string | null;
+  position: number;
+  created_at: string;
+  data: any; // jsonb
 };
 
 function cn(...x: Array<string | false | null | undefined>) {
   return x.filter(Boolean).join(" ");
 }
 
-function defaultBlockData(type: BlockType) {
+function ensureTextData(data: any) {
+  const d = data ?? {};
+  const style = d.style ?? {};
+  return {
+    text: typeof d.text === "string" ? d.text : (d.value ?? "Текст"),
+    style: {
+      fontFamily: style.fontFamily ?? "Inter",
+      fontSize: style.fontSize ?? "16px",
+      fontWeight: style.fontWeight ?? "400",
+      color: style.color ?? "#ffffff",
+      align: (style.align ?? "center") as Align,
+    },
+  };
+}
+
+function defaultData(type: BlockType) {
   switch (type) {
-    case "button":
-      return { label: "Кнопка", url: "https://example.com", style: { variant: "dark" } };
     case "text":
-      return {
-        text: "Текст",
-        style: {
-          fontFamily: "Inter",
-          fontSize: "16px",
-          fontWeight: "400",
-          color: "#ffffff",
-          align: "center" as Align,
-        },
-      };
+      return ensureTextData({ text: "Текст", style: { align: "center" } });
+    case "button":
+      return { label: "Кнопка", url: "https://example.com" };
     case "image":
       return { url: "", alt: "Изображение" };
     case "divider":
-      return { style: { type: "line" } };
+      return { kind: "line" };
     case "map":
-      return { title: "Мы на карте", address: "Москва", lat: 55.751244, lng: 37.618423 };
+      return { title: "Мы на карте", address: "Москва" };
     default:
       return {};
   }
 }
 
-/**
- * ✅ ПРЕДУСЛОВИЯ В SUPABASE (коротко):
- * 1) Таблица taplinks должна иметь колонки avatar_url, banner_url (см. SQL ниже).
- * 2) В Storage создать bucket: taplink-assets (public).
- *
- * SQL (в Supabase SQL editor):
- * alter table public.taplinks add column if not exists avatar_url text;
- * alter table public.taplinks add column if not exists banner_url text;
- *
- * Storage:
- * - создаёшь bucket "taplink-assets" и ставишь Public = ON
- */
-
 export default function EditorPage() {
   const params = useParams<{ id: string }>();
-  const taplinkId = params?.id;
+  const pageId = params?.id;
 
-  const [taplink, setTaplink] = useState<Taplink | null>(null);
-  const [blocks, setBlocks] = useState<TaplinkBlock[]>([]);
+  const [page, setPage] = useState<Page | null>(null);
+  const [blocks, setBlocks] = useState<BlockRow[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const active = useMemo(() => blocks.find((b) => b.id === activeId) ?? null, [blocks, activeId]);
 
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
-  // DnD
+  // drag&drop
   const dragId = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!taplinkId) return;
+    if (!pageId) return;
     void loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [taplinkId]);
+  }, [pageId]);
 
   async function loadAll() {
     setMsg(null);
-    // taplink
-    const tl = await supabase.from("taplinks").select("id,name,slug,avatar_url,banner_url").eq("id", taplinkId).maybeSingle();
-    if (tl.error) setMsg(tl.error.message);
-    setTaplink((tl.data as any) ?? null);
+
+    // pages1
+    const p = await supabase
+      .from("pages1")
+      .select("id,title,slug,avatar_url,banner_url")
+      .eq("id", pageId)
+      .maybeSingle();
+
+    if (p.error) setMsg(p.error.message);
+    setPage((p.data as any) ?? null);
 
     // blocks
-    const bl = await supabase.from("taplink_blocks").select("*").eq("taplink_id", taplinkId).order("order", { ascending: true });
-    if (bl.error) setMsg(bl.error.message);
-    const data = (bl.data as any[]) ?? [];
-    setBlocks(data);
-    setActiveId(data?.[0]?.id ?? null);
+    const b = await supabase
+      .from("taplink_blocks")
+      .select("*")
+      .eq("page_id", pageId)
+      .order("position", { ascending: true });
+
+    if (b.error) setMsg(b.error.message);
+
+    const rows = (b.data as any[]) ?? [];
+    // нормализуем text-блоки, чтобы align был всегда
+    const normalized = rows.map((r) => {
+      if (r.type === "text") {
+        return { ...r, data: ensureTextData(r.data) };
+      }
+      return r;
+    });
+
+    setBlocks(normalized);
+    setActiveId(normalized?.[0]?.id ?? null);
   }
 
   async function addBlock(type: BlockType) {
-    if (!taplinkId) return;
+    if (!pageId) return;
     setBusy(true);
     setMsg(null);
 
-    const nextOrder = blocks.length ? Math.max(...blocks.map((b) => b.order)) + 1 : 1;
+    const nextPos = blocks.length ? Math.max(...blocks.map((x) => x.position ?? 0)) + 1 : 1;
 
     const res = await supabase
       .from("taplink_blocks")
-      .insert({ taplink_id: taplinkId, type, order: nextOrder, data: defaultBlockData(type) })
+      .insert({
+        page_id: pageId,
+        type,
+        title: type === "text" ? "Текст" : type === "button" ? "Кнопка" : type,
+        value: "",
+        position: nextPos,
+        data: defaultData(type),
+      })
       .select("*")
       .single();
 
@@ -123,9 +145,9 @@ export default function EditorPage() {
 
     if (res.error) return setMsg(res.error.message);
 
-    const nb = res.data as any as TaplinkBlock;
-    setBlocks((p) => [...p, nb].sort((a, b) => a.order - b.order));
-    setActiveId(nb.id);
+    const row = res.data as any as BlockRow;
+    setBlocks((p) => [...p, row].sort((a, b) => (a.position ?? 0) - (b.position ?? 0)));
+    setActiveId(row.id);
   }
 
   async function deleteBlock(id: string) {
@@ -139,12 +161,10 @@ export default function EditorPage() {
     if (activeId === id) setActiveId(null);
   }
 
-  // ✅ обновление data блока
   async function updateActiveData(patch: any) {
     if (!active) return;
     const nextData = { ...(active.data ?? {}), ...patch };
 
-    // оптимистично
     setBlocks((p) => p.map((b) => (b.id === active.id ? { ...b, data: nextData } : b)));
 
     setBusy(true);
@@ -154,37 +174,33 @@ export default function EditorPage() {
     if (res.error) setMsg(res.error.message);
   }
 
-  // ✅ Drag & Drop reorder (через пересчёт order)
   async function reorderByIds(nextIds: string[]) {
-    const map = new Map<string, TaplinkBlock>();
+    const map = new Map<string, BlockRow>();
     blocks.forEach((b) => map.set(b.id, b));
 
-    const nextBlocks = nextIds
-      .map((id, idx) => {
-        const b = map.get(id)!;
-        return { ...b, order: idx + 1 };
-      })
-      .filter(Boolean);
+    const nextBlocks = nextIds.map((id, idx) => {
+      const b = map.get(id)!;
+      return { ...b, position: idx + 1 };
+    });
 
     setBlocks(nextBlocks);
 
-    // сохраняем в базу
+    // сохраняем позиции
     setBusy(true);
     setMsg(null);
-    const payload = nextBlocks.map((b) => ({ id: b.id, order: b.order }));
+    const payload = nextBlocks.map((b) => ({ id: b.id, position: b.position }));
     const res = await supabase.from("taplink_blocks").upsert(payload as any);
     setBusy(false);
     if (res.error) setMsg(res.error.message);
   }
 
-  // ✅ Upload avatar/banner (файл -> Supabase Storage -> URL -> taplinks.avatar_url/banner_url)
   async function uploadToStorage(file: File, kind: "avatar" | "banner") {
-    if (!taplinkId) return null;
+    if (!pageId) return;
     setBusy(true);
     setMsg(null);
 
     const ext = file.name.split(".").pop() || "png";
-    const path = `${taplinkId}/${kind}-${Date.now()}.${ext}`;
+    const path = `${pageId}/${kind}-${Date.now()}.${ext}`;
 
     const up = await supabase.storage.from("taplink-assets").upload(path, file, {
       cacheControl: "3600",
@@ -193,38 +209,35 @@ export default function EditorPage() {
 
     if (up.error) {
       setBusy(false);
-      setMsg(up.error.message);
-      return null;
+      return setMsg(up.error.message);
     }
 
-    // public url (bucket должен быть public)
     const pub = supabase.storage.from("taplink-assets").getPublicUrl(path);
     const url = pub.data.publicUrl;
 
-    // save to taplinks
     const col = kind === "avatar" ? "avatar_url" : "banner_url";
-    const upd = await supabase.from("taplinks").update({ [col]: url }).eq("id", taplinkId).select("id,avatar_url,banner_url").single();
+    const upd = await supabase.from("pages1").update({ [col]: url }).eq("id", pageId).select("id,avatar_url,banner_url").single();
 
     setBusy(false);
 
-    if (upd.error) {
-      setMsg(upd.error.message);
-      return null;
-    }
+    if (upd.error) return setMsg(upd.error.message);
 
-    setTaplink((p) => ({ ...(p as any), ...(upd.data as any) }));
-    return url;
+    setPage((p) => ({ ...(p as any), ...(upd.data as any) }));
   }
 
   async function setLinkImage(url: string, kind: "avatar" | "banner") {
-    if (!taplinkId) return;
+    if (!pageId) return;
     setBusy(true);
     setMsg(null);
+
     const col = kind === "avatar" ? "avatar_url" : "banner_url";
-    const upd = await supabase.from("taplinks").update({ [col]: url }).eq("id", taplinkId).select("id,avatar_url,banner_url").single();
+    const upd = await supabase.from("pages1").update({ [col]: url }).eq("id", pageId).select("id,avatar_url,banner_url").single();
+
     setBusy(false);
+
     if (upd.error) return setMsg(upd.error.message);
-    setTaplink((p) => ({ ...(p as any), ...(upd.data as any) }));
+
+    setPage((p) => ({ ...(p as any), ...(upd.data as any) }));
   }
 
   return (
@@ -233,13 +246,13 @@ export default function EditorPage() {
         <div className="flex items-center justify-between gap-3">
           <div>
             <div className="text-xs text-white/60">Редактор</div>
-            <div className="text-xl font-semibold">{taplink?.name ?? "Taplink"}</div>
+            <div className="text-xl font-semibold">{page?.title ?? "Taplink"}</div>
             <div className="mt-1 text-xs text-white/50">
-              {taplink?.slug ? (
+              {page?.slug ? (
                 <span>
                   Публичная ссылка:{" "}
-                  <Link className="underline" href={`/${taplink.slug}`}>
-                    /{taplink.slug}
+                  <Link className="underline" href={`/${page.slug}`}>
+                    /{page.slug}
                   </Link>
                 </span>
               ) : (
@@ -265,7 +278,7 @@ export default function EditorPage() {
         {msg && <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-3 text-sm text-white/80">{msg}</div>}
 
         <div className="mt-6 grid gap-4 lg:grid-cols-12">
-          {/* LEFT: blocks list */}
+          {/* LEFT */}
           <section className="rounded-3xl border border-white/10 bg-white/5 p-4 lg:col-span-4">
             <div className="flex items-center justify-between">
               <div className="text-sm font-semibold">Блоки</div>
@@ -286,75 +299,77 @@ export default function EditorPage() {
             </div>
 
             <div className="mt-4 space-y-2">
-              {blocks.map((b) => (
-                <div
-                  key={b.id}
-                  draggable
-                  onDragStart={() => (dragId.current = b.id)}
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={() => {
-                    const from = dragId.current;
-                    const to = b.id;
-                    if (!from || from === to) return;
+              {blocks
+                .slice()
+                .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+                .map((b) => (
+                  <div
+                    key={b.id}
+                    draggable
+                    onDragStart={() => (dragId.current = b.id)}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={() => {
+                      const from = dragId.current;
+                      const to = b.id;
+                      if (!from || from === to) return;
 
-                    const ids = blocks.map((x) => x.id);
-                    const fromIndex = ids.indexOf(from);
-                    const toIndex = ids.indexOf(to);
+                      const ids = blocks.map((x) => x.id);
+                      const fromIndex = ids.indexOf(from);
+                      const toIndex = ids.indexOf(to);
 
-                    ids.splice(fromIndex, 1);
-                    ids.splice(toIndex, 0, from);
+                      ids.splice(fromIndex, 1);
+                      ids.splice(toIndex, 0, from);
 
-                    dragId.current = null;
-                    void reorderByIds(ids);
-                  }}
-                  className={cn(
-                    "flex items-center justify-between gap-2 rounded-2xl border px-3 py-2",
-                    activeId === b.id ? "border-white/40 bg-white/10" : "border-white/10 bg-black/20"
-                  )}
-                >
-                  <button onClick={() => setActiveId(b.id)} className="text-left flex-1">
-                    <div className="text-sm font-medium">{b.type}</div>
-                    <div className="text-xs text-white/50">#{b.order}</div>
-                  </button>
-
-                  <button
-                    onClick={() => void deleteBlock(b.id)}
-                    className="rounded-xl border border-white/10 px-2 py-1 text-xs text-white/60 hover:bg-white/10"
-                    disabled={busy}
+                      dragId.current = null;
+                      void reorderByIds(ids);
+                    }}
+                    className={cn(
+                      "flex items-center justify-between gap-2 rounded-2xl border px-3 py-2",
+                      activeId === b.id ? "border-white/40 bg-white/10" : "border-white/10 bg-black/20"
+                    )}
                   >
-                    удалить
-                  </button>
-                </div>
-              ))}
+                    <button onClick={() => setActiveId(b.id)} className="text-left flex-1">
+                      <div className="text-sm font-medium">{b.type}</div>
+                      <div className="text-xs text-white/50">#{b.position}</div>
+                    </button>
 
-              {blocks.length === 0 && <div className="text-sm text-white/60">Пока нет блоков — добавь справа.</div>}
+                    <button
+                      onClick={() => void deleteBlock(b.id)}
+                      className="rounded-xl border border-white/10 px-2 py-1 text-xs text-white/60 hover:bg-white/10"
+                      disabled={busy}
+                    >
+                      удалить
+                    </button>
+                  </div>
+                ))}
+
+              {blocks.length === 0 && <div className="text-sm text-white/60">Пока нет блоков — добавь выше.</div>}
             </div>
           </section>
 
-          {/* MIDDLE: settings */}
+          {/* MIDDLE */}
           <section className="rounded-3xl border border-white/10 bg-white/5 p-4 lg:col-span-4">
             <div className="text-sm font-semibold">Настройки</div>
+
             <div className="mt-3 space-y-4">
-              {/* Avatar + Banner */}
               <div className="rounded-3xl border border-white/10 bg-black/20 p-4">
                 <div className="text-sm font-semibold">Аватар и баннер</div>
                 <div className="mt-3 grid gap-4">
                   <ImagePicker
                     title="Аватар"
-                    currentUrl={taplink?.avatar_url ?? ""}
+                    currentUrl={page?.avatar_url ?? ""}
                     onPickFile={(f) => void uploadToStorage(f, "avatar")}
                     onPickLink={(u) => void setLinkImage(u, "avatar")}
                   />
                   <ImagePicker
                     title="Баннер"
-                    currentUrl={taplink?.banner_url ?? ""}
+                    currentUrl={page?.banner_url ?? ""}
                     onPickFile={(f) => void uploadToStorage(f, "banner")}
                     onPickLink={(u) => void setLinkImage(u, "banner")}
                   />
                 </div>
               </div>
 
-              {/* Active block settings */}
               {!active ? (
                 <div className="text-sm text-white/60">Выбери блок слева.</div>
               ) : (
@@ -362,39 +377,28 @@ export default function EditorPage() {
                   <div className="text-sm font-semibold">Блок: {active.type}</div>
 
                   {active.type === "text" && (
-                    <TextSettings
-                      data={active.data}
-                      onChange={(patch) => void updateActiveData(patch)}
-                    />
+                    <TextSettings data={ensureTextData(active.data)} onChange={(patch) => void updateActiveData(patch)} />
                   )}
 
-                  {active.type === "button" && (
-                    <ButtonSettings
-                      data={active.data}
-                      onChange={(patch) => void updateActiveData(patch)}
-                    />
-                  )}
+                  {active.type === "button" && <ButtonSettings data={active.data ?? {}} onChange={(patch) => void updateActiveData(patch)} />}
 
                   {active.type !== "text" && active.type !== "button" && (
-                    <div className="mt-3 text-sm text-white/60">
-                      Для этого блока настройки добавим позже (MVP).
-                    </div>
+                    <div className="mt-3 text-sm text-white/60">Для этого блока настройки добавим позже (MVP).</div>
                   )}
                 </div>
               )}
             </div>
           </section>
 
-          {/* RIGHT: preview */}
+          {/* RIGHT */}
           <section className="rounded-3xl border border-white/10 bg-white/5 p-4 lg:col-span-4">
             <div className="text-sm font-semibold">Превью</div>
 
             <div className="mt-3 rounded-3xl border border-white/10 bg-black p-4">
-              {/* banner */}
               <div className="h-28 w-full overflow-hidden rounded-3xl border border-white/10 bg-white/5">
-                {taplink?.banner_url ? (
+                {page?.banner_url ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={taplink.banner_url} alt="banner" className="h-full w-full object-cover" />
+                  <img src={page.banner_url} alt="banner" className="h-full w-full object-cover" />
                 ) : (
                   <div className="flex h-full items-center justify-center text-xs text-white/40">Баннер</div>
                 )}
@@ -402,16 +406,16 @@ export default function EditorPage() {
 
               <div className="-mt-8 flex items-end gap-3 px-2">
                 <div className="h-16 w-16 overflow-hidden rounded-2xl border border-white/15 bg-white/5">
-                  {taplink?.avatar_url ? (
+                  {page?.avatar_url ? (
                     // eslint-disable-next-line @next/next/no-img-element
-                    <img src={taplink.avatar_url} alt="avatar" className="h-full w-full object-cover" />
+                    <img src={page.avatar_url} alt="avatar" className="h-full w-full object-cover" />
                   ) : (
-                    <div className="flex h-full items-center justify-center text-xs text-white/40">Аватар</div>
+                    <div className="flex h-full items-center justify-center text-[10px] text-white/40">Аватар</div>
                   )}
                 </div>
 
                 <div className="pb-2">
-                  <div className="text-sm font-semibold">{taplink?.name ?? "Название"}</div>
+                  <div className="text-sm font-semibold">{page?.title ?? "Название"}</div>
                   <div className="text-xs text-white/60">Taplink by Tappo</div>
                 </div>
               </div>
@@ -419,7 +423,7 @@ export default function EditorPage() {
               <div className="mt-5 space-y-3">
                 {blocks
                   .slice()
-                  .sort((a, b) => a.order - b.order)
+                  .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
                   .map((b) => (
                     <BlockPreview key={b.id} block={b} />
                   ))}
@@ -428,9 +432,7 @@ export default function EditorPage() {
               </div>
             </div>
 
-            <div className="mt-3 text-xs text-white/50">
-              Перетаскивай блоки мышкой в колонке «Блоки».
-            </div>
+            <div className="mt-3 text-xs text-white/50">Перетаскивай блоки мышкой в колонке «Блоки».</div>
           </section>
         </div>
       </div>
@@ -438,7 +440,7 @@ export default function EditorPage() {
   );
 }
 
-/* ------------------------- Settings UI ------------------------- */
+/* ---------------- Settings components ---------------- */
 
 function TextSettings({ data, onChange }: { data: any; onChange: (patch: any) => void }) {
   const text = data?.text ?? "";
@@ -613,28 +615,28 @@ function ImagePicker({
   );
 }
 
-/* ------------------------- Preview ------------------------- */
+/* ---------------- Preview ---------------- */
 
-function BlockPreview({ block }: { block: TaplinkBlock }) {
+function BlockPreview({ block }: { block: BlockRow }) {
   const d = block.data ?? {};
 
   if (block.type === "text") {
-    const style = d?.style ?? {};
-    const align: Align = style?.align ?? "center";
+    const td = ensureTextData(d);
+    const s = td.style;
 
     return (
       <div
         style={{
-          color: style?.color ?? "#ffffff",
-          fontSize: style?.fontSize ?? "16px",
-          fontWeight: style?.fontWeight ?? "400",
-          fontFamily: style?.fontFamily ?? "inherit",
-          textAlign: align,
+          color: s.color,
+          fontSize: s.fontSize,
+          fontWeight: s.fontWeight,
+          fontFamily: s.fontFamily,
+          textAlign: s.align,
           whiteSpace: "pre-wrap",
         }}
         className="text-sm"
       >
-        {d?.text ?? "Текст"}
+        {td.text}
       </div>
     );
   }
