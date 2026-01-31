@@ -1,8 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  experimental: {
-    allowedDevOrigins: ['http://192.168.3.5:3000'],
-  },
-}
+  // ничего лишнего
+};
 
-export default nextConfig
+export default nextConfig;
