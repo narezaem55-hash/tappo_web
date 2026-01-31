@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 
 // ✅ Поменяй импорт, если у тебя supabase клиент в другом месте
-import { supabase } from "@/lib/supabase/supabaseClient";
+import { supabase } from "../../../../lib/supabase/supabaseClient";
  // <-- если ошибка, скажи как у тебя называется файл/экспорт
 
 type BlockType = "button" | "text" | "image" | "divider" | "map";
