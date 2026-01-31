@@ -1,1246 +1,666 @@
-'use client'
+"use client";
 
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { useParams, useRouter } from 'next/navigation'
-import { supabase } from '@/lib/supabaseClient'
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useParams } from "next/navigation";
+import Link from "next/link";
 
-import ReactCrop, { type Crop, type PixelCrop } from 'react-image-crop'
-import 'react-image-crop/dist/ReactCrop.css'
+// ⚠️ ВАЖНО: подстрой импорт под твой проект.
+// У тебя в lib точно есть supabase-клиент. Если файл называется иначе — поменяй 1 строку.
+import { supabase } from "@/lib/supabase"; // <- если у тебя другой путь/экспорт, поправь тут
 
-type PageRow = { id: string; title: string | null; slug: string | null; description: string | null }
+type BlockType = "button" | "text" | "image" | "divider" | "map";
+type Align = "left" | "center" | "right";
 
-type BlockType = 'link' | 'review' | 'call' | 'text' | 'image' | 'divider' | 'map'
-type Block = { id: string; page_id: string; type: BlockType; title: string; value: string | null; position: number; data: any }
+type Taplink = {
+  id: string;
+  name?: string;
+  slug?: string;
+  avatar_url?: string | null;
+  banner_url?: string | null;
+};
 
-function labelForType(t: BlockType) {
-  if (t === 'text') return 'Текст'
-  if (t === 'image') return 'Фото'
-  if (t === 'divider') return 'Разделитель'
-  if (t === 'map') return 'Карта'
-  if (t === 'call') return 'Телефон'
-  if (t === 'review') return 'Отзывы'
-  return 'Ссылка'
+type TaplinkBlock = {
+  id: string;
+  taplink_id: string;
+  type: BlockType;
+  order: number;
+  data: any;
+};
+
+function cn(...x: Array<string | false | null | undefined>) {
+  return x.filter(Boolean).join(" ");
 }
 
-function toPercentCropFull(): Crop {
-  return { unit: '%', x: 0, y: 0, width: 100, height: 100 }
+function defaultBlockData(type: BlockType) {
+  switch (type) {
+    case "button":
+      return { label: "Кнопка", url: "https://example.com", style: { variant: "dark" } };
+    case "text":
+      return {
+        text: "Текст",
+        style: {
+          fontFamily: "Inter",
+          fontSize: "16px",
+          fontWeight: "400",
+          color: "#ffffff",
+          align: "center" as Align,
+        },
+      };
+    case "image":
+      return { url: "", alt: "Изображение" };
+    case "divider":
+      return { style: { type: "line" } };
+    case "map":
+      return { title: "Мы на карте", address: "Москва", lat: 55.751244, lng: 37.618423 };
+    default:
+      return {};
+  }
 }
 
-async function cropToBlob(imgEl: HTMLImageElement, crop: PixelCrop, mime = 'image/png'): Promise<Blob> {
-  const canvas = document.createElement('canvas')
-  const scaleX = imgEl.naturalWidth / imgEl.width
-  const scaleY = imgEl.naturalHeight / imgEl.height
-
-  canvas.width = Math.max(1, Math.floor(crop.width * scaleX))
-  canvas.height = Math.max(1, Math.floor(crop.height * scaleY))
-
-  const ctx = canvas.getContext('2d')
-  if (!ctx) throw new Error('Canvas error')
-
-  ctx.drawImage(
-    imgEl,
-    crop.x * scaleX,
-    crop.y * scaleY,
-    crop.width * scaleX,
-    crop.height * scaleY,
-    0,
-    0,
-    canvas.width,
-    canvas.height
-  )
-
-  return new Promise((resolve, reject) => {
-    canvas.toBlob((b) => {
-      if (!b) return reject(new Error('Не удалось создать изображение'))
-      resolve(b)
-    }, mime)
-  })
-}
-
-// 25 популярных шрифтов (без установки доп. файлов, это web-safe + популярные системные)
-const FONT_OPTIONS: { label: string; value: string }[] = [
-  { label: 'Inter', value: 'Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif' },
-  { label: 'System UI', value: 'system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif' },
-  { label: 'Arial', value: 'Arial, Helvetica, sans-serif' },
-  { label: 'Helvetica', value: 'Helvetica, Arial, sans-serif' },
-  { label: 'Verdana', value: 'Verdana, Geneva, sans-serif' },
-  { label: 'Tahoma', value: 'Tahoma, Verdana, sans-serif' },
-  { label: 'Trebuchet', value: '"Trebuchet MS", Arial, sans-serif' },
-  { label: 'Segoe UI', value: '"Segoe UI", Tahoma, Arial, sans-serif' },
-  { label: 'Roboto', value: 'Roboto, "Segoe UI", Arial, sans-serif' },
-  { label: 'Open Sans', value: '"Open Sans", Arial, sans-serif' },
-  { label: 'Montserrat', value: 'Montserrat, Arial, sans-serif' },
-  { label: 'Poppins', value: 'Poppins, Arial, sans-serif' },
-  { label: 'Nunito', value: 'Nunito, Arial, sans-serif' },
-  { label: 'Lato', value: 'Lato, Arial, sans-serif' },
-  { label: 'Ubuntu', value: 'Ubuntu, Arial, sans-serif' },
-  { label: 'Georgia', value: 'Georgia, serif' },
-  { label: 'Times', value: '"Times New Roman", Times, serif' },
-  { label: 'Garamond', value: 'Garamond, serif' },
-  { label: 'Courier', value: '"Courier New", Courier, monospace' },
-  { label: 'Consolas', value: 'Consolas, "Courier New", monospace' },
-  { label: 'Monaco', value: 'Monaco, "Courier New", monospace' },
-  { label: 'Comic Sans', value: '"Comic Sans MS", "Comic Sans", cursive' },
-  { label: 'Impact', value: 'Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif' },
-  { label: 'Palatino', value: '"Palatino Linotype", Palatino, serif' },
-  { label: 'Bookman', value: '"Bookman Old Style", Bookman, serif' },
-]
-
-const SIZE_OPTIONS = [12, 14, 16, 18, 20, 24, 28, 32, 36, 40]
+/**
+ * ✅ ПРЕДУСЛОВИЯ В SUPABASE (коротко):
+ * 1) Таблица taplinks должна иметь колонки avatar_url, banner_url (см. SQL ниже).
+ * 2) В Storage создать bucket: taplink-assets (public).
+ *
+ * SQL (в Supabase SQL editor):
+ * alter table public.taplinks add column if not exists avatar_url text;
+ * alter table public.taplinks add column if not exists banner_url text;
+ *
+ * Storage:
+ * - создаёшь bucket "taplink-assets" и ставишь Public = ON
+ */
 
 export default function EditorPage() {
-  const { id } = useParams<{ id: string }>()
-  const router = useRouter()
+  const params = useParams<{ id: string }>();
+  const taplinkId = params?.id;
 
-  const [loading, setLoading] = useState(true)
-  const [page, setPage] = useState<PageRow | null>(null)
+  const [taplink, setTaplink] = useState<Taplink | null>(null);
+  const [blocks, setBlocks] = useState<TaplinkBlock[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const active = useMemo(() => blocks.find((b) => b.id === activeId) ?? null, [blocks, activeId]);
 
-  const [title, setTitle] = useState('')
-  const [description, setDescription] = useState('')
-  const [blocks, setBlocks] = useState<Block[]>([])
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
 
-  // модалки
-  const [pickerOpen, setPickerOpen] = useState(false)
-  const [editorOpen, setEditorOpen] = useState(false)
-
-  const [mode, setMode] = useState<'create' | 'edit'>('create')
-  const [editingId, setEditingId] = useState<string | null>(null)
-
-  const [blockType, setBlockType] = useState<BlockType>('link')
-
-  // поля блока
-  const [fLabel, setFLabel] = useState('')
-  const [fUrl, setFUrl] = useState('')
-
-  // ✅ текст теперь HTML + стили
-  const [fTextHtml, setFTextHtml] = useState('')
-  const [textColor, setTextColor] = useState('#111111')
-  const [textSize, setTextSize] = useState(14)
-  const [textFont, setTextFont] = useState(FONT_OPTIONS[0].value)
-
-  // активные кнопки форматирования (подсветка)
-  const [fmt, setFmt] = useState({ bold: false, italic: false, underline: false, strike: false })
-
-  // contentEditable ref
-  const richRef = useRef<HTMLDivElement | null>(null)
-
-  // фото
-  const [fCaption, setFCaption] = useState('')
-  const [imageFile, setImageFile] = useState<File | null>(null)
-  const [uploading, setUploading] = useState(false)
-  const fileInputRef = useRef<HTMLInputElement | null>(null)
-
-  const [imgSrc, setImgSrc] = useState<string>('') // objectURL
-  const imgRef = useRef<HTMLImageElement | null>(null)
-
-  const [crop, setCrop] = useState<Crop>({ unit: '%', x: 10, y: 10, width: 80, height: 80 })
-  const [completedCrop, setCompletedCrop] = useState<PixelCrop | null>(null)
-  const [aspect, setAspect] = useState<number | undefined>(undefined)
-  const [noCrop, setNoCrop] = useState(false)
-  const [fitMode, setFitMode] = useState<'cover' | 'contain'>('cover')
-
-  // autosave page
-  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
-  const ignoreAutosaveRef = useRef(true)
-  const autosaveTimerRef = useRef<any>(null)
-
-  const previewUrl = useMemo(() => (page?.slug ? `/p/${page.slug}` : null), [page?.slug])
-
-  const loadAll = async () => {
-    setLoading(true)
-
-    const { data: pageData, error: pageErr } = await supabase
-      .from('pages1')
-      .select('id,title,slug,description')
-      .eq('id', id)
-      .single()
-
-    if (pageErr) {
-      alert(pageErr.message)
-      setLoading(false)
-      return
-    }
-
-    const { data: blocksData, error: blocksErr } = await supabase
-      .from('taplink_blocks')
-      .select('id,page_id,type,title,value,position,data')
-      .eq('page_id', id)
-      .order('position', { ascending: true })
-
-    if (blocksErr) {
-      alert(blocksErr.message)
-      setLoading(false)
-      return
-    }
-
-    setPage(pageData as PageRow)
-    setTitle(pageData?.title || '')
-    setDescription(pageData?.description || '')
-    setBlocks((blocksData || []) as Block[])
-    ignoreAutosaveRef.current = false
-    setLoading(false)
-  }
+  // DnD
+  const dragId = useRef<string | null>(null);
 
   useEffect(() => {
-    loadAll()
-    // eslint-disable-next-line
-  }, [])
+    if (!taplinkId) return;
+    void loadAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taplinkId]);
 
-  useEffect(() => {
-    if (ignoreAutosaveRef.current) return
-    if (!page?.id) return
+  async function loadAll() {
+    setMsg(null);
+    // taplink
+    const tl = await supabase.from("taplinks").select("id,name,slug,avatar_url,banner_url").eq("id", taplinkId).maybeSingle();
+    if (tl.error) setMsg(tl.error.message);
+    setTaplink((tl.data as any) ?? null);
 
-    if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current)
-
-    autosaveTimerRef.current = setTimeout(async () => {
-      setSaveState('saving')
-      const { error } = await supabase
-        .from('pages1')
-        .update({ title: title.trim(), description: description.trim() })
-        .eq('id', page.id)
-
-      if (error) {
-        setSaveState('error')
-        return
-      }
-      setSaveState('saved')
-      setTimeout(() => setSaveState('idle'), 900)
-    }, 300)
-
-    return () => {
-      if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current)
-    }
-  }, [title, description, page?.id])
-
-  const openBlockPicker = () => {
-    setMode('create')
-    setEditingId(null)
-    setPickerOpen(true)
+    // blocks
+    const bl = await supabase.from("taplink_blocks").select("*").eq("taplink_id", taplinkId).order("order", { ascending: true });
+    if (bl.error) setMsg(bl.error.message);
+    const data = (bl.data as any[]) ?? [];
+    setBlocks(data);
+    setActiveId(data?.[0]?.id ?? null);
   }
 
-  const resetImageEditor = () => {
-    setImageFile(null)
-    setUploading(false)
-    if (imgSrc) URL.revokeObjectURL(imgSrc)
-    setImgSrc('')
-    setCrop({ unit: '%', x: 10, y: 10, width: 80, height: 80 })
-    setCompletedCrop(null)
-    setAspect(undefined)
-    setNoCrop(false)
-    setFitMode('cover')
+  async function addBlock(type: BlockType) {
+    if (!taplinkId) return;
+    setBusy(true);
+    setMsg(null);
+
+    const nextOrder = blocks.length ? Math.max(...blocks.map((b) => b.order)) + 1 : 1;
+
+    const res = await supabase
+      .from("taplink_blocks")
+      .insert({ taplink_id: taplinkId, type, order: nextOrder, data: defaultBlockData(type) })
+      .select("*")
+      .single();
+
+    setBusy(false);
+
+    if (res.error) return setMsg(res.error.message);
+
+    const nb = res.data as any as TaplinkBlock;
+    setBlocks((p) => [...p, nb].sort((a, b) => a.order - b.order));
+    setActiveId(nb.id);
   }
 
-  const resetTextEditor = () => {
-    setFTextHtml('')
-    setTextColor('#111111')
-    setTextSize(14)
-    setTextFont(FONT_OPTIONS[0].value)
-    setFmt({ bold: false, italic: false, underline: false, strike: false })
-    if (richRef.current) richRef.current.innerHTML = ''
+  async function deleteBlock(id: string) {
+    setBusy(true);
+    setMsg(null);
+    const res = await supabase.from("taplink_blocks").delete().eq("id", id);
+    setBusy(false);
+    if (res.error) return setMsg(res.error.message);
+
+    setBlocks((p) => p.filter((x) => x.id !== id));
+    if (activeId === id) setActiveId(null);
   }
 
-  const pickType = (t: BlockType) => {
-    setPickerOpen(false)
+  // ✅ обновление data блока
+  async function updateActiveData(patch: any) {
+    if (!active) return;
+    const nextData = { ...(active.data ?? {}), ...patch };
 
-    setMode('create')
-    setEditingId(null)
-    setBlockType(t)
+    // оптимистично
+    setBlocks((p) => p.map((b) => (b.id === active.id ? { ...b, data: nextData } : b)));
 
-    setFLabel('')
-    setFUrl('')
-    setFCaption('')
-    resetImageEditor()
-    resetTextEditor()
-
-    if (t === 'map') setFLabel('Наш адрес')
-    if (t === 'link') setFLabel('Ссылка')
-    if (t === 'review') setFLabel('Отзывы')
-    if (t === 'call') setFLabel('Позвонить')
-
-    setEditorOpen(true)
-
-    setTimeout(() => {
-      if (t === 'text') richRef.current?.focus()
-    }, 50)
+    setBusy(true);
+    setMsg(null);
+    const res = await supabase.from("taplink_blocks").update({ data: nextData }).eq("id", active.id);
+    setBusy(false);
+    if (res.error) setMsg(res.error.message);
   }
 
-  const openEdit = (b: Block) => {
-    setMode('edit')
-    setEditingId(b.id)
-    setBlockType(b.type)
+  // ✅ Drag & Drop reorder (через пересчёт order)
+  async function reorderByIds(nextIds: string[]) {
+    const map = new Map<string, TaplinkBlock>();
+    blocks.forEach((b) => map.set(b.id, b));
 
-    const d = b.data || {}
-    setFLabel((d.label as string) || (b.title as string) || '')
-    setFUrl((d.url as string) || (d.link as string) || (b.value as string) || '')
-    setFCaption((d.caption as string) || '')
+    const nextBlocks = nextIds
+      .map((id, idx) => {
+        const b = map.get(id)!;
+        return { ...b, order: idx + 1 };
+      })
+      .filter(Boolean);
 
-    resetImageEditor()
-    resetTextEditor()
+    setBlocks(nextBlocks);
 
-    if (b.type === 'image') {
-      setFitMode((d.fit as 'cover' | 'contain') || 'cover')
-    }
+    // сохраняем в базу
+    setBusy(true);
+    setMsg(null);
+    const payload = nextBlocks.map((b) => ({ id: b.id, order: b.order }));
+    const res = await supabase.from("taplink_blocks").upsert(payload as any);
+    setBusy(false);
+    if (res.error) setMsg(res.error.message);
+  }
 
-    if (b.type === 'text') {
-      const html = (d.html as string) || ''
-      const oldText = (d.text as string) || ''
-      const merged = html || (oldText ? escapeToHtml(oldText) : '')
-      setFTextHtml(merged)
+  // ✅ Upload avatar/banner (файл -> Supabase Storage -> URL -> taplinks.avatar_url/banner_url)
+  async function uploadToStorage(file: File, kind: "avatar" | "banner") {
+    if (!taplinkId) return null;
+    setBusy(true);
+    setMsg(null);
 
-      const style = d.style || {}
-      setTextColor((style.color as string) || '#111111')
-      setTextSize(Number(style.size) || 14)
-      setTextFont((style.font as string) || FONT_OPTIONS[0].value)
+    const ext = file.name.split(".").pop() || "png";
+    const path = `${taplinkId}/${kind}-${Date.now()}.${ext}`;
 
-      setTimeout(() => {
-        if (richRef.current) {
-          richRef.current.innerHTML = merged
-          richRef.current.focus()
-          updateFmtFromSelection()
-        }
-      }, 50)
+    const up = await supabase.storage.from("taplink-assets").upload(path, file, {
+      cacheControl: "3600",
+      upsert: true,
+    });
+
+    if (up.error) {
+      setBusy(false);
+      setMsg(up.error.message);
+      return null;
     }
 
-    setEditorOpen(true)
-  }
+    // public url (bucket должен быть public)
+    const pub = supabase.storage.from("taplink-assets").getPublicUrl(path);
+    const url = pub.data.publicUrl;
 
-  const closeEditor = () => {
-    setEditorOpen(false)
-    resetImageEditor()
-  }
+    // save to taplinks
+    const col = kind === "avatar" ? "avatar_url" : "banner_url";
+    const upd = await supabase.from("taplinks").update({ [col]: url }).eq("id", taplinkId).select("id,avatar_url,banner_url").single();
 
-  // ✅ upload file to Supabase Storage and return public URL
-  const uploadBlobToStorage = async (blob: Blob, fileNameBase: string, mime: string) => {
-    setUploading(true)
-    const {
-      data: { user },
-      error: userErr,
-    } = await supabase.auth.getUser()
+    setBusy(false);
 
-    if (userErr || !user) {
-      setUploading(false)
-      throw new Error('Нет авторизации. Перезайди в аккаунт.')
+    if (upd.error) {
+      setMsg(upd.error.message);
+      return null;
     }
 
-    const ext = mime.includes('jpeg') ? 'jpg' : mime.includes('webp') ? 'webp' : 'png'
-    const filePath = `${user.id}/${id}/${fileNameBase}-${crypto.randomUUID()}.${ext}`
-
-    const { error: upErr } = await supabase.storage.from('media').upload(filePath, blob, {
-      cacheControl: '3600',
-      upsert: false,
-      contentType: mime,
-    })
-
-    if (upErr) {
-      setUploading(false)
-      throw new Error(upErr.message)
-    }
-
-    const { data } = supabase.storage.from('media').getPublicUrl(filePath)
-    setUploading(false)
-    return data.publicUrl
+    setTaplink((p) => ({ ...(p as any), ...(upd.data as any) }));
+    return url;
   }
 
-  const uploadImageIfNeeded = async (): Promise<string> => {
-    if (!imageFile) return fUrl.trim()
-
-    if (noCrop) {
-      const blob = imageFile
-      return await uploadBlobToStorage(blob, 'image', imageFile.type || 'image/png')
-    }
-
-    if (!imgRef.current) throw new Error('Не удалось открыть изображение для кадрирования')
-    if (!completedCrop || completedCrop.width <= 1 || completedCrop.height <= 1) {
-      throw new Error('Выбери область кадрирования')
-    }
-
-    const blob = await cropToBlob(imgRef.current, completedCrop, 'image/png')
-    return await uploadBlobToStorage(blob, 'image-crop', 'image/png')
+  async function setLinkImage(url: string, kind: "avatar" | "banner") {
+    if (!taplinkId) return;
+    setBusy(true);
+    setMsg(null);
+    const col = kind === "avatar" ? "avatar_url" : "banner_url";
+    const upd = await supabase.from("taplinks").update({ [col]: url }).eq("id", taplinkId).select("id,avatar_url,banner_url").single();
+    setBusy(false);
+    if (upd.error) return setMsg(upd.error.message);
+    setTaplink((p) => ({ ...(p as any), ...(upd.data as any) }));
   }
-
-  const buildPayload = async () => {
-    const t = blockType
-
-    if (t === 'divider') {
-      return { type: 'divider', title: 'Разделитель', value: null as string | null, data: {} }
-    }
-
-    if (t === 'text') {
-      const html = (fTextHtml || richRef.current?.innerHTML || '').trim()
-      return {
-        type: 'text',
-        title: 'Текст',
-        value: null as string | null,
-        data: {
-          html,
-          style: { color: textColor, size: textSize, font: textFont },
-        },
-      }
-    }
-
-    if (t === 'image') {
-      const url = await uploadImageIfNeeded()
-      return {
-        type: 'image',
-        title: 'Фото',
-        value: null as string | null,
-        data: { url, caption: fCaption.trim(), fit: fitMode },
-      }
-    }
-
-    if (t === 'map') {
-      return {
-        type: 'map',
-        title: fLabel.trim() || 'Карта',
-        value: null as string | null,
-        data: { label: fLabel.trim() || 'Карта', link: fUrl.trim() },
-      }
-    }
-
-    const label = fLabel.trim() || labelForType(t)
-    return {
-      type: t,
-      title: label,
-      value: (fUrl.trim() || null) as string | null,
-      data: { label, url: fUrl.trim() || '' },
-    }
-  }
-
-  const saveBlock = async () => {
-    try {
-      if (blockType === 'text') {
-        const html = (richRef.current?.innerHTML ?? fTextHtml).trim()
-        if (!stripHtml(html).trim()) return alert('Заполни текст')
-      }
-      if (blockType === 'image') {
-        if (!imageFile && !fUrl.trim()) return alert('Выбери файл или вставь ссылку на фото')
-      }
-      if (blockType === 'map') {
-        if (!fUrl.trim()) return alert('Вставь ссылку на карту')
-      }
-      if (blockType === 'link' || blockType === 'review' || blockType === 'call') {
-        if (!fUrl.trim()) return alert('Вставь ссылку/телефон')
-      }
-
-      const payload = await buildPayload()
-
-      if (mode === 'create') {
-        const { error } = await supabase.from('taplink_blocks').insert({
-          page_id: id,
-          type: payload.type,
-          title: payload.title,
-          value: payload.value,
-          data: payload.data,
-          position: blocks.length,
-        })
-        if (error) return alert(error.message)
-        closeEditor()
-        await loadAll()
-        return
-      }
-
-      if (mode === 'edit' && editingId) {
-        const { error } = await supabase
-          .from('taplink_blocks')
-          .update({
-            type: payload.type,
-            title: payload.title,
-            value: payload.value,
-            data: payload.data,
-          })
-          .eq('id', editingId)
-        if (error) return alert(error.message)
-        closeEditor()
-        await loadAll()
-      }
-    } catch (e: any) {
-      alert(e?.message || 'Ошибка сохранения')
-      setUploading(false)
-    }
-  }
-
-  const deleteBlock = async () => {
-    if (!editingId) return
-    if (!confirm('Удалить блок?')) return
-    const { error } = await supabase.from('taplink_blocks').delete().eq('id', editingId)
-    if (error) return alert(error.message)
-    closeEditor()
-    await loadAll()
-  }
-
-  const duplicateBlock = async () => {
-    if (!editingId) return
-    const original = blocks.find((b) => b.id === editingId)
-    if (!original) return
-
-    const { error } = await supabase.from('taplink_blocks').insert({
-      page_id: original.page_id,
-      type: original.type,
-      title: original.title,
-      value: original.value,
-      data: original.data,
-      position: blocks.length,
-    })
-    if (error) return alert(error.message)
-
-    closeEditor()
-    await loadAll()
-  }
-
-  // ======= text toolbar helpers =======
-
-  const updateFmtFromSelection = () => {
-    // работает по текущему курсору/выделению
-    const bold = document.queryCommandState('bold')
-    const italic = document.queryCommandState('italic')
-    const underline = document.queryCommandState('underline')
-    const strike = document.queryCommandState('strikeThrough')
-    setFmt({ bold, italic, underline, strike })
-  }
-
-  const exec = (cmd: string, val?: string) => {
-    if (!richRef.current) return
-    richRef.current.focus()
-    document.execCommand(cmd, false, val)
-    setFTextHtml(richRef.current.innerHTML)
-    updateFmtFromSelection()
-  }
-
-  const applyFontToSelectionOrAll = (font: string) => {
-  setTextFont(font)
-  if (!richRef.current) return
-
-  const sel = window.getSelection()
-  const hasRange =
-    !!sel && sel.rangeCount > 0 && !sel.getRangeAt(0).collapsed
-
-  if (hasRange) {
-    wrapSelectionWithStyle({ fontFamily: font })
-    setFTextHtml(richRef.current.innerHTML)
-    updateFmtFromSelection()
-    return
-  }
-
-  // без выделения — применяем ко всему тексту
-  richRef.current.style.fontFamily = font
-  setFTextHtml(richRef.current.innerHTML)
-}
-
-
-  const applySizeToSelectionOrAll = (size: number) => {
-    setTextSize(size)
-
-    const sel = window.getSelection()
-    const hasRange = !!sel && sel.rangeCount > 0 && !sel.getRangeAt(0).collapsed
-    if (!richRef.current) return
-
-    if (hasRange) {
-      // document.execCommand('fontSize') работает странно (1..7), поэтому делаем span-обертку
-      wrapSelectionWithStyle({ fontSize: `${size}px` })
-      setFTextHtml(richRef.current.innerHTML)
-      return
-    }
-
-    // весь текст
-    richRef.current.style.fontSize = `${size}px`
-    setFTextHtml(richRef.current.innerHTML)
-  }
-
-  const applyColorToSelectionOrAll = (color: string) => {
-    setTextColor(color)
-
-    const sel = window.getSelection()
-    const hasRange = !!sel && sel.rangeCount > 0 && !sel.getRangeAt(0).collapsed
-    if (!richRef.current) return
-
-    if (hasRange) {
-      exec('foreColor', color)
-      return
-    }
-
-    // весь текст
-    richRef.current.style.color = color
-    setFTextHtml(richRef.current.innerHTML)
-  }
-
-  const wrapSelectionWithStyle = (styleObj: Record<string, string>) => {
-    const sel = window.getSelection()
-    if (!sel || sel.rangeCount === 0) return
-    const range = sel.getRangeAt(0)
-    if (range.collapsed) return
-
-    const span = document.createElement('span')
-    Object.entries(styleObj).forEach(([k, v]) => {
-      ;(span.style as any)[k] = v
-    })
-
-    span.appendChild(range.extractContents())
-    range.insertNode(span)
-
-    // поставить курсор после вставки
-    range.setStartAfter(span)
-    range.collapse(true)
-    sel.removeAllRanges()
-    sel.addRange(range)
-  }
-
-  const onRichSelectionChange = () => {
-    // обновляем подсветку кнопок при клике/выделении
-    updateFmtFromSelection()
-  }
-
-  useEffect(() => {
-    // глобально ловим выделение (когда модалка открыта)
-    const handler = () => {
-      if (!editorOpen || blockType !== 'text') return
-      onRichSelectionChange()
-    }
-    document.addEventListener('selectionchange', handler)
-    return () => document.removeEventListener('selectionchange', handler)
-  }, [editorOpen, blockType])
-
-  if (loading) return <div style={{ padding: 24, color: 'rgba(255,255,255,0.7)' }}>Загрузка...</div>
 
   return (
-    <div style={{ padding: 24 }}>
-      {/* top bar */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
-        <button
-          onClick={() => router.push('/dashboard/pages')}
-          style={{
-            padding: '10px 14px',
-            borderRadius: 14,
-            border: '1px solid rgba(255,255,255,0.2)',
-            background: 'transparent',
-            color: 'white',
-            cursor: 'pointer',
-          }}
-        >
-          ← Назад
-        </button>
-
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-          <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)' }}>
-            {saveState === 'saving' && 'Сохраняю…'}
-            {saveState === 'saved' && 'Сохранено ✓'}
-            {saveState === 'error' && 'Ошибка'}
+    <div className="min-h-screen bg-black text-white">
+      <div className="mx-auto max-w-6xl px-4 py-6">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-xs text-white/60">Редактор</div>
+            <div className="text-xl font-semibold">{taplink?.name ?? "Taplink"}</div>
+            <div className="mt-1 text-xs text-white/50">
+              {taplink?.slug ? (
+                <span>
+                  Публичная ссылка:{" "}
+                  <Link className="underline" href={`/${taplink.slug}`}>
+                    /{taplink.slug}
+                  </Link>
+                </span>
+              ) : (
+                "—"
+              )}
+            </div>
           </div>
 
-          <button
-            onClick={() => {
-              if (!previewUrl) return alert('Нет slug. Задай slug в “Мои таплинки”')
-              window.open(previewUrl, '_blank')
-            }}
-            style={{
-              padding: '10px 14px',
-              borderRadius: 14,
-              border: '1px solid rgba(255,255,255,0.2)',
-              background: 'transparent',
-              color: 'white',
-              cursor: 'pointer',
-            }}
-          >
-            Предпросмотр
+          <div className="flex items-center gap-2">
+            <Link href="/dashboard" className="rounded-xl border border-white/20 px-4 py-2 text-sm hover:bg-white/10">
+              Назад
+            </Link>
+            <button
+              onClick={() => void loadAll()}
+              className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:opacity-90"
+              disabled={busy}
+            >
+              Обновить
+            </button>
+          </div>
+        </div>
+
+        {msg && <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-3 text-sm text-white/80">{msg}</div>}
+
+        <div className="mt-6 grid gap-4 lg:grid-cols-12">
+          {/* LEFT: blocks list */}
+          <section className="rounded-3xl border border-white/10 bg-white/5 p-4 lg:col-span-4">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-semibold">Блоки</div>
+              <div className="text-xs text-white/50">Drag & Drop</div>
+            </div>
+
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              {(["button", "text", "image", "divider", "map"] as BlockType[]).map((t) => (
+                <button
+                  key={t}
+                  disabled={busy}
+                  onClick={() => void addBlock(t)}
+                  className="rounded-2xl border border-white/15 bg-black px-3 py-2 text-sm hover:bg-white/10"
+                >
+                  + {t}
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-4 space-y-2">
+              {blocks.map((b) => (
+                <div
+                  key={b.id}
+                  draggable
+                  onDragStart={() => (dragId.current = b.id)}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={() => {
+                    const from = dragId.current;
+                    const to = b.id;
+                    if (!from || from === to) return;
+
+                    const ids = blocks.map((x) => x.id);
+                    const fromIndex = ids.indexOf(from);
+                    const toIndex = ids.indexOf(to);
+
+                    ids.splice(fromIndex, 1);
+                    ids.splice(toIndex, 0, from);
+
+                    dragId.current = null;
+                    void reorderByIds(ids);
+                  }}
+                  className={cn(
+                    "flex items-center justify-between gap-2 rounded-2xl border px-3 py-2",
+                    activeId === b.id ? "border-white/40 bg-white/10" : "border-white/10 bg-black/20"
+                  )}
+                >
+                  <button onClick={() => setActiveId(b.id)} className="text-left flex-1">
+                    <div className="text-sm font-medium">{b.type}</div>
+                    <div className="text-xs text-white/50">#{b.order}</div>
+                  </button>
+
+                  <button
+                    onClick={() => void deleteBlock(b.id)}
+                    className="rounded-xl border border-white/10 px-2 py-1 text-xs text-white/60 hover:bg-white/10"
+                    disabled={busy}
+                  >
+                    удалить
+                  </button>
+                </div>
+              ))}
+
+              {blocks.length === 0 && <div className="text-sm text-white/60">Пока нет блоков — добавь справа.</div>}
+            </div>
+          </section>
+
+          {/* MIDDLE: settings */}
+          <section className="rounded-3xl border border-white/10 bg-white/5 p-4 lg:col-span-4">
+            <div className="text-sm font-semibold">Настройки</div>
+            <div className="mt-3 space-y-4">
+              {/* Avatar + Banner */}
+              <div className="rounded-3xl border border-white/10 bg-black/20 p-4">
+                <div className="text-sm font-semibold">Аватар и баннер</div>
+                <div className="mt-3 grid gap-4">
+                  <ImagePicker
+                    title="Аватар"
+                    currentUrl={taplink?.avatar_url ?? ""}
+                    onPickFile={(f) => void uploadToStorage(f, "avatar")}
+                    onPickLink={(u) => void setLinkImage(u, "avatar")}
+                  />
+                  <ImagePicker
+                    title="Баннер"
+                    currentUrl={taplink?.banner_url ?? ""}
+                    onPickFile={(f) => void uploadToStorage(f, "banner")}
+                    onPickLink={(u) => void setLinkImage(u, "banner")}
+                  />
+                </div>
+              </div>
+
+              {/* Active block settings */}
+              {!active ? (
+                <div className="text-sm text-white/60">Выбери блок слева.</div>
+              ) : (
+                <div className="rounded-3xl border border-white/10 bg-black/20 p-4">
+                  <div className="text-sm font-semibold">Блок: {active.type}</div>
+
+                  {active.type === "text" && (
+                    <TextSettings
+                      data={active.data}
+                      onChange={(patch) => void updateActiveData(patch)}
+                    />
+                  )}
+
+                  {active.type === "button" && (
+                    <ButtonSettings
+                      data={active.data}
+                      onChange={(patch) => void updateActiveData(patch)}
+                    />
+                  )}
+
+                  {active.type !== "text" && active.type !== "button" && (
+                    <div className="mt-3 text-sm text-white/60">
+                      Для этого блока настройки добавим позже (MVP).
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </section>
+
+          {/* RIGHT: preview */}
+          <section className="rounded-3xl border border-white/10 bg-white/5 p-4 lg:col-span-4">
+            <div className="text-sm font-semibold">Превью</div>
+
+            <div className="mt-3 rounded-3xl border border-white/10 bg-black p-4">
+              {/* banner */}
+              <div className="h-28 w-full overflow-hidden rounded-3xl border border-white/10 bg-white/5">
+                {taplink?.banner_url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={taplink.banner_url} alt="banner" className="h-full w-full object-cover" />
+                ) : (
+                  <div className="flex h-full items-center justify-center text-xs text-white/40">Баннер</div>
+                )}
+              </div>
+
+              <div className="-mt-8 flex items-end gap-3 px-2">
+                <div className="h-16 w-16 overflow-hidden rounded-2xl border border-white/15 bg-white/5">
+                  {taplink?.avatar_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={taplink.avatar_url} alt="avatar" className="h-full w-full object-cover" />
+                  ) : (
+                    <div className="flex h-full items-center justify-center text-xs text-white/40">Аватар</div>
+                  )}
+                </div>
+
+                <div className="pb-2">
+                  <div className="text-sm font-semibold">{taplink?.name ?? "Название"}</div>
+                  <div className="text-xs text-white/60">Taplink by Tappo</div>
+                </div>
+              </div>
+
+              <div className="mt-5 space-y-3">
+                {blocks
+                  .slice()
+                  .sort((a, b) => a.order - b.order)
+                  .map((b) => (
+                    <BlockPreview key={b.id} block={b} />
+                  ))}
+
+                {blocks.length === 0 && <div className="text-sm text-white/60">Добавь блоки слева.</div>}
+              </div>
+            </div>
+
+            <div className="mt-3 text-xs text-white/50">
+              Перетаскивай блоки мышкой в колонке «Блоки».
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------- Settings UI ------------------------- */
+
+function TextSettings({ data, onChange }: { data: any; onChange: (patch: any) => void }) {
+  const text = data?.text ?? "";
+  const style = data?.style ?? {};
+  const align: Align = style?.align ?? "center";
+
+  const baseBtn =
+    "h-9 w-9 rounded-xl border border-white/20 text-white/70 hover:bg-white/10 flex items-center justify-center";
+  const activeBtn = "h-9 w-9 rounded-xl bg-white text-black flex items-center justify-center";
+
+  return (
+    <div className="mt-3 space-y-4">
+      <div>
+        <div className="mb-2 text-xs text-white/60">Текст</div>
+        <textarea
+          className="min-h-[110px] w-full rounded-2xl border border-white/15 bg-white/5 p-3 text-sm outline-none focus:ring-2 focus:ring-white/20"
+          value={text}
+          onChange={(e) => onChange({ text: e.target.value })}
+          placeholder="Введите текст..."
+        />
+      </div>
+
+      <div>
+        <div className="mb-2 text-xs text-white/60">Выравнивание</div>
+        <div className="flex gap-2">
+          <button type="button" className={align === "left" ? activeBtn : baseBtn} onClick={() => onChange({ style: { ...style, align: "left" } })} title="Слева">
+            ⬅
+          </button>
+          <button type="button" className={align === "center" ? activeBtn : baseBtn} onClick={() => onChange({ style: { ...style, align: "center" } })} title="По центру">
+            ⬍
+          </button>
+          <button type="button" className={align === "right" ? activeBtn : baseBtn} onClick={() => onChange({ style: { ...style, align: "right" } })} title="Справа">
+            ➡
           </button>
         </div>
       </div>
 
-      {/* phone */}
-      <div style={{ display: 'flex', justifyContent: 'center' }}>
-        <div style={{ width: 390, maxWidth: '100%' }}>
-          <div style={{ borderRadius: 28, overflow: 'hidden', background: '#e9e9e9', boxShadow: '0 20px 60px rgba(0,0,0,0.45)' }}>
-            <div style={{ height: 160, background: '#cfcfcf', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(0,0,0,0.6)', fontSize: 12 }}>
-              Баннер
-            </div>
-
-            <div style={{ position: 'relative' }}>
-              <div
-                style={{
-                  position: 'absolute',
-                  top: -40,
-                  left: '50%',
-                  transform: 'translateX(-50%)',
-                  width: 80,
-                  height: 80,
-                  borderRadius: 9999,
-                  background: '#bdbdbd',
-                  border: '4px solid #e9e9e9',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: 'rgba(0,0,0,0.6)',
-                  fontSize: 11,
-                }}
-              >
-                Аватар
-              </div>
-            </div>
-
-            <div style={{ padding: '64px 20px 22px' }}>
-              <div style={{ textAlign: 'center' }}>
-                <input
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  placeholder="Название бизнеса"
-                  style={{
-                    width: '100%',
-                    textAlign: 'center',
-                    fontSize: 20,
-                    fontWeight: 800,
-                    border: 'none',
-                    outline: 'none',
-                    background: 'transparent',
-                    color: '#000',
-                    borderBottom: '1px solid rgba(0,0,0,0.12)',
-                    paddingBottom: 6,
-                  }}
-                />
-                <input
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  placeholder="Описание"
-                  style={{
-                    width: '100%',
-                    marginTop: 10,
-                    textAlign: 'center',
-                    fontSize: 14,
-                    border: 'none',
-                    outline: 'none',
-                    background: 'transparent',
-                    color: 'rgba(0,0,0,0.7)',
-                    borderBottom: '1px solid rgba(0,0,0,0.10)',
-                    paddingBottom: 6,
-                  }}
-                />
-              </div>
-
-              <div style={{ marginTop: 18, display: 'grid', gap: 12 }}>
-                {blocks.map((b) => {
-                  const d = b.data || {}
-
-                  if (b.type === 'divider') {
-                    return (
-                      <div
-                        key={b.id}
-                        onClick={() => openEdit(b)}
-                        style={{ height: 1, background: 'rgba(0,0,0,0.12)', borderRadius: 9999, cursor: 'pointer' }}
-                      />
-                    )
-                  }
-
-                  if (b.type === 'image') {
-                    const imageUrl = d.url || ''
-                    const caption = d.caption || ''
-                    const fit = (d.fit as 'cover' | 'contain') || 'cover'
-                    return (
-                      <div key={b.id} onClick={() => openEdit(b)} style={{ cursor: 'pointer' }}>
-                        {imageUrl ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={imageUrl}
-                            alt=""
-                            style={{
-                              width: '100%',
-                              maxHeight: 420,
-                              objectFit: fit,
-                              display: 'block',
-                              borderRadius: 16,
-                            }}
-                          />
-                        ) : (
-                          <div style={{ height: 220, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(0,0,0,0.55)' }}>Фото</div>
-                        )}
-                        {caption ? <div style={{ marginTop: 8, fontSize: 12, color: 'rgba(0,0,0,0.65)', whiteSpace: 'pre-wrap' }}>{caption}</div> : null}
-                      </div>
-                    )
-                  }
-
-                  if (b.type === 'text') {
-                    const html = (d.html || '').toString()
-                    const style = d.style || {}
-                    const color = (style.color as string) || 'rgba(0,0,0,0.85)'
-                    const size = Number(style.size) || 14
-                    const font = (style.font as string) || FONT_OPTIONS[0].value
-                    return (
-                      <div
-                        key={b.id}
-                        onClick={() => openEdit(b)}
-                        style={{
-                          cursor: 'pointer',
-                          color,
-                          fontSize: size,
-                          lineHeight: 1.38,
-                          whiteSpace: 'normal',
-                          fontFamily: font,
-                        }}
-                        dangerouslySetInnerHTML={{ __html: html || '<span style="opacity:.6">Текст</span>' }}
-                      />
-                    )
-                  }
-
-                  const label = d.label || b.title || labelForType(b.type)
-                  return (
-                    <button
-                      key={b.id}
-                      onClick={() => openEdit(b)}
-                      style={{
-                        width: '100%',
-                        padding: '14px 12px',
-                        borderRadius: 18,
-                        background: '#9c9c9c',
-                        border: '1px solid rgba(0,0,0,0.18)',
-                        color: '#000',
-                        fontWeight: 800,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      {b.type === 'map' ? `🗺 ${label}` : label}
-                    </button>
-                  )
-                })}
-
-                <button
-                  onClick={openBlockPicker}
-                  style={{
-                    width: '100%',
-                    padding: '14px 12px',
-                    borderRadius: 18,
-                    background: '#8f8f8f',
-                    border: '1px solid rgba(0,0,0,0.18)',
-                    color: '#000',
-                    fontWeight: 800,
-                    cursor: 'pointer',
-                  }}
-                >
-                  Добавить блок +
-                </button>
-              </div>
-
-              <div style={{ paddingTop: 16, textAlign: 'center', fontSize: 12, color: 'rgba(0,0,0,0.4)' }}>Tappo</div>
-            </div>
-          </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <div className="mb-2 text-xs text-white/60">Размер</div>
+          <input
+            className="h-10 w-full rounded-2xl border border-white/15 bg-white/5 px-3 text-sm outline-none"
+            value={style?.fontSize ?? "16px"}
+            onChange={(e) => onChange({ style: { ...style, fontSize: e.target.value } })}
+            placeholder="16px"
+          />
+        </div>
+        <div>
+          <div className="mb-2 text-xs text-white/60">Цвет</div>
+          <input
+            className="h-10 w-full rounded-2xl border border-white/15 bg-white/5 px-3 text-sm outline-none"
+            value={style?.color ?? "#ffffff"}
+            onChange={(e) => onChange({ style: { ...style, color: e.target.value } })}
+            placeholder="#ffffff"
+          />
         </div>
       </div>
 
-      {/* picker tiles */}
-      {pickerOpen && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 99999 }}>
-          <div onClick={() => setPickerOpen(false)} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.72)' }} />
-          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-            <div style={{ width: '100%', maxWidth: 860, borderRadius: 18, border: '1px solid rgba(255,255,255,0.12)', background: '#1e1f22', boxShadow: '0 30px 90px rgba(0,0,0,0.65)', overflow: 'hidden' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 18px', borderBottom: '1px solid rgba(255,255,255,0.10)' }}>
-                <div style={{ fontSize: 22, fontWeight: 700 }}>Новый блок</div>
-                <button onClick={() => setPickerOpen(false)} style={{ background: 'transparent', border: 'none', color: 'rgba(255,255,255,0.75)', fontSize: 26, cursor: 'pointer', lineHeight: 1 }}>
-                  ×
-                </button>
-              </div>
-
-              <div style={{ padding: 18 }}>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 14 }}>
-                  <Tile title="Текст" icon="Aa" onClick={() => pickType('text')} />
-                  <Tile title="Ссылка" icon="↗" onClick={() => pickType('link')} />
-                  <Tile title="Фото" icon="🖼" onClick={() => pickType('image')} />
-                  <Tile title="Разделитель" icon="≡" onClick={() => pickType('divider')} />
-                  <Tile title="Карта" icon="📍" onClick={() => pickType('map')} />
-                  <Tile title="Телефон" icon="📞" onClick={() => pickType('call')} />
-                </div>
-              </div>
-
-              <div style={{ height: 10 }} />
-            </div>
-          </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <div className="mb-2 text-xs text-white/60">Шрифт</div>
+          <input
+            className="h-10 w-full rounded-2xl border border-white/15 bg-white/5 px-3 text-sm outline-none"
+            value={style?.fontFamily ?? "Inter"}
+            onChange={(e) => onChange({ style: { ...style, fontFamily: e.target.value } })}
+            placeholder="Inter"
+          />
         </div>
-      )}
-
-      {/* editor modal */}
-      {editorOpen && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 99999 }}>
-          <div onClick={closeEditor} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.72)' }} />
-          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-            <div style={{ width: '100%', maxWidth: 860, borderRadius: 18, border: '1px solid rgba(255,255,255,0.12)', background: '#1e1f22', boxShadow: '0 30px 90px rgba(0,0,0,0.65)', overflow: 'hidden' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 18px', borderBottom: '1px solid rgba(255,255,255,0.10)' }}>
-                <div style={{ fontSize: 18, fontWeight: 700 }}>
-                  {mode === 'create' ? `Добавить: ${labelForType(blockType)}` : `Редактировать: ${labelForType(blockType)}`}
-                </div>
-                <button onClick={closeEditor} style={{ background: 'transparent', border: 'none', color: 'rgba(255,255,255,0.75)', fontSize: 26, cursor: 'pointer', lineHeight: 1 }}>
-                  ×
-                </button>
-              </div>
-
-              <div style={{ padding: 18 }}>
-                {(blockType === 'link' || blockType === 'review' || blockType === 'call' || blockType === 'map') && (
-                  <>
-                    <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: 12, marginBottom: 8 }}>
-                      {blockType === 'map' ? 'Название (что увидит пользователь)' : 'Название'}
-                    </div>
-                    <input
-                      value={fLabel}
-                      onChange={(e) => setFLabel(e.target.value)}
-                      placeholder={blockType === 'map' ? 'Например: Кусковская 12/1' : 'Например: Отзывы'}
-                      style={{ width: '100%', padding: '12px 14px', borderRadius: 12, background: 'rgba(0,0,0,0.22)', border: '1px solid rgba(255,255,255,0.10)', outline: 'none', color: '#fff', marginBottom: 14 }}
-                    />
-
-                    <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: 12, marginBottom: 8 }}>
-                      {blockType === 'call' ? 'Телефон' : 'Ссылка'}
-                    </div>
-                    <input
-                      value={fUrl}
-                      onChange={(e) => setFUrl(e.target.value)}
-                      placeholder={blockType === 'call' ? '+7 999 123-45-67' : 'https://example.com'}
-                      style={{ width: '100%', padding: '12px 14px', borderRadius: 12, background: 'rgba(0,0,0,0.22)', border: '1px solid rgba(255,255,255,0.10)', outline: 'none', color: '#fff', marginBottom: 16 }}
-                    />
-                  </>
-                )}
-
-                {blockType === 'text' && (
-                  <>
-                    {/* ✅ ПАНЕЛЬ РЕДАКТИРОВАНИЯ */}
-                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
-                      <button type="button" onClick={() => exec('bold')} style={tbBtnStyle(fmt.bold)}>
-                        B
-                      </button>
-                      <button type="button" onClick={() => exec('italic')} style={tbBtnStyle(fmt.italic)}>
-                        I
-                      </button>
-                      <button type="button" onClick={() => exec('underline')} style={tbBtnStyle(fmt.underline)}>
-                        U
-                      </button>
-                      <button type="button" onClick={() => exec('strikeThrough')} style={tbBtnStyle(fmt.strike)}>
-                        S
-                      </button>
-
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                        <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.65)' }}>Шрифт</span>
-                        <select
-                          value={textFont}
-                          onChange={(e) => applyFontToSelectionOrAll(e.target.value)}
-                          style={tbSelectStyle}
-                        >
-                          {FONT_OPTIONS.map((f) => (
-                            <option key={f.label} value={f.value}>
-                              {f.label}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                        <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.65)' }}>Размер</span>
-                        <select
-                          value={textSize}
-                          onChange={(e) => applySizeToSelectionOrAll(Number(e.target.value))}
-                          style={tbSelectStyle}
-                        >
-                          {SIZE_OPTIONS.map((n) => (
-                            <option key={n} value={n}>
-                              {n}px
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                        <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.65)' }}>Цвет</span>
-                        <input
-                          type="color"
-                          value={textColor}
-                          onChange={(e) => applyColorToSelectionOrAll(e.target.value)}
-                          style={{ width: 40, height: 34, background: 'transparent', border: 'none', cursor: 'pointer' }}
-                        />
-                      </div>
-                    </div>
-
-                    <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: 12, marginBottom: 8 }}>Текст</div>
-
-                    <div
-                      ref={richRef}
-                      contentEditable
-                      suppressContentEditableWarning
-                      onInput={(e) => {
-                      const v = (e.currentTarget as HTMLDivElement).innerHTML
-                      setFTextHtml(v)
-                    }}
-
-                      onMouseUp={onRichSelectionChange}
-                      onKeyUp={onRichSelectionChange}
-                      style={{
-                        width: '100%',
-                        minHeight: 160,
-                        padding: '12px 14px',
-                        borderRadius: 12,
-                        background: 'rgba(0,0,0,0.22)',
-                        border: '1px solid rgba(255,255,255,0.10)',
-                        outline: 'none',
-                        color: '#fff',
-                        marginBottom: 16,
-                        overflow: 'auto',
-                        fontFamily: textFont, // ✅ применяем к контейнеру (если нет выделения — всё будет этим шрифтом)
-                        fontSize: `${textSize}px`,
-                      }}
-                    />
-                    <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)' }}>
-                      Можно выделять слово и менять стиль, либо без выделения — включать стиль и печатать дальше.
-                    </div>
-                  </>
-                )}
-
-                {/* image/divider/map остаются без изменений */}
-                {blockType === 'image' && (
-                  <>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                      <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: 12 }}>Фото</div>
-                      <button
-                        onClick={() => fileInputRef.current?.click()}
-                        style={{ padding: '8px 10px', borderRadius: 10, border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.06)', color: '#fff', cursor: 'pointer', fontSize: 12 }}
-                      >
-                        Выбрать файл
-                      </button>
-                    </div>
-
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept="image/*"
-                      onChange={(e) => {
-                        const f = e.target.files?.[0] || null
-                        setImageFile(f)
-                        if (imgSrc) URL.revokeObjectURL(imgSrc)
-                        if (f) {
-                          const url = URL.createObjectURL(f)
-                          setImgSrc(url)
-                          setNoCrop(false)
-                          setFitMode('cover')
-                        } else {
-                          setImgSrc('')
-                        }
-                      }}
-                      style={{ display: 'none' }}
-                    />
-
-                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
-                      <label style={{ display: 'flex', gap: 8, alignItems: 'center', color: 'rgba(255,255,255,0.75)', fontSize: 12 }}>
-                        <input
-                          type="checkbox"
-                          checked={noCrop}
-                          onChange={(e) => {
-                            const v = e.target.checked
-                            setNoCrop(v)
-                            if (v) {
-                              setFitMode('contain')
-                              setAspect(undefined)
-                            }
-                          }}
-                        />
-                        Показать полностью (без обрезки)
-                      </label>
-
-                      <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-                        <button onClick={() => setAspect(undefined)} style={chipBtn(aspect === undefined)} type="button" disabled={noCrop}>
-                          Свободно
-                        </button>
-                        <button onClick={() => setAspect(1)} style={chipBtn(aspect === 1)} type="button" disabled={noCrop}>
-                          Квадрат 1:1
-                        </button>
-                      </div>
-                    </div>
-
-                    {imgSrc ? (
-                      <div style={{ border: '1px solid rgba(255,255,255,0.10)', borderRadius: 14, overflow: 'hidden', background: 'rgba(0,0,0,0.25)', marginBottom: 14 }}>
-                        <div style={{ padding: 10, color: 'rgba(255,255,255,0.6)', fontSize: 12 }}>
-                          {noCrop ? 'Без кадрирования: загрузится оригинал' : 'Выдели область кадрирования'}
-                        </div>
-
-                        {!noCrop ? (
-                          <div style={{ padding: 10 }}>
-                            <ReactCrop
-                              crop={crop}
-                              onChange={(_, pc) => setCrop(pc)}
-                              onComplete={(c) => setCompletedCrop(c)}
-                              aspect={aspect}
-                              keepSelection
-                            >
-                              {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img
-                                ref={imgRef}
-                                alt="crop"
-                                src={imgSrc}
-                                onLoad={() => setCrop(toPercentCropFull())}
-                                style={{ maxHeight: 340, width: '100%', objectFit: 'contain' }}
-                              />
-                            </ReactCrop>
-                          </div>
-                        ) : (
-                          <div style={{ padding: 10 }}>
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={imgSrc} alt="full" style={{ width: '100%', maxHeight: 340, objectFit: 'contain', borderRadius: 12 }} />
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <>
-                        <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: 12, marginBottom: 8 }}>Или ссылка на фото (URL)</div>
-                        <input
-                          value={fUrl}
-                          onChange={(e) => setFUrl(e.target.value)}
-                          placeholder="https://…"
-                          style={{ width: '100%', padding: '12px 14px', borderRadius: 12, background: 'rgba(0,0,0,0.22)', border: '1px solid rgba(255,255,255,0.10)', outline: 'none', color: '#fff', marginBottom: 14 }}
-                        />
-                      </>
-                    )}
-
-                    <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
-                      <button type="button" onClick={() => setFitMode('cover')} style={chipBtn(fitMode === 'cover')}>
-                        Заполнить (cover)
-                      </button>
-                      <button type="button" onClick={() => setFitMode('contain')} style={chipBtn(fitMode === 'contain')}>
-                        Показать полностью (contain)
-                      </button>
-                    </div>
-
-                    <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: 12, marginBottom: 8 }}>Подпись (необязательно)</div>
-                    <input
-                      value={fCaption}
-                      onChange={(e) => setFCaption(e.target.value)}
-                      placeholder="Например: Наш салон"
-                      style={{ width: '100%', padding: '12px 14px', borderRadius: 12, background: 'rgba(0,0,0,0.22)', border: '1px solid rgba(255,255,255,0.10)', outline: 'none', color: '#fff', marginBottom: 16 }}
-                    />
-                  </>
-                )}
-
-                {blockType === 'divider' && <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 13, marginBottom: 16 }}>Разделитель добавится как тонкая линия.</div>}
-
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-                  <div style={{ display: 'flex', gap: 10 }}>
-                    {mode === 'edit' && (
-                      <>
-                        <button onClick={duplicateBlock} style={ghostBtn}>
-                          Дублировать
-                        </button>
-
-                        <button onClick={deleteBlock} style={dangerBtn}>
-                          Удалить
-                        </button>
-                      </>
-                    )}
-                  </div>
-
-                  <button onClick={saveBlock} disabled={uploading} style={primaryBtn(uploading)}>
-                    {uploading ? 'Загрузка…' : 'Сохранить'}
-                  </button>
-                </div>
-              </div>
-
-              <div style={{ height: 8 }} />
-            </div>
-          </div>
+        <div>
+          <div className="mb-2 text-xs text-white/60">Насыщенность</div>
+          <input
+            className="h-10 w-full rounded-2xl border border-white/15 bg-white/5 px-3 text-sm outline-none"
+            value={style?.fontWeight ?? "400"}
+            onChange={(e) => onChange({ style: { ...style, fontWeight: e.target.value } })}
+            placeholder="400"
+          />
         </div>
-      )}
+      </div>
     </div>
-  )
+  );
 }
 
-function Tile(props: { title: string; icon: string; onClick: () => void }) {
+function ButtonSettings({ data, onChange }: { data: any; onChange: (patch: any) => void }) {
   return (
-    <button
-      onClick={props.onClick}
-      style={{
-        height: 120,
-        borderRadius: 14,
-        background: 'rgba(255,255,255,0.06)',
-        border: '1px solid rgba(255,255,255,0.10)',
-        color: 'rgba(255,255,255,0.88)',
-        cursor: 'pointer',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 10,
-      }}
-    >
-      <div style={{ fontSize: 34, opacity: 0.85 }}>{props.icon}</div>
-      <div style={{ fontSize: 14, fontWeight: 700 }}>{props.title}</div>
-    </button>
-  )
+    <div className="mt-3 space-y-3">
+      <div>
+        <div className="mb-2 text-xs text-white/60">Текст кнопки</div>
+        <input
+          className="h-10 w-full rounded-2xl border border-white/15 bg-white/5 px-3 text-sm outline-none"
+          value={data?.label ?? ""}
+          onChange={(e) => onChange({ label: e.target.value })}
+          placeholder="Кнопка"
+        />
+      </div>
+      <div>
+        <div className="mb-2 text-xs text-white/60">Ссылка</div>
+        <input
+          className="h-10 w-full rounded-2xl border border-white/15 bg-white/5 px-3 text-sm outline-none"
+          value={data?.url ?? ""}
+          onChange={(e) => onChange({ url: e.target.value })}
+          placeholder="https://..."
+        />
+      </div>
+    </div>
+  );
 }
 
-function tbBtnStyle(active: boolean): React.CSSProperties {
-  return {
-    padding: '8px 10px',
-    borderRadius: 10,
-    border: active ? '1px solid rgba(90,160,255,0.9)' : '1px solid rgba(255,255,255,0.14)',
-    background: active ? 'rgba(37,99,235,0.35)' : 'rgba(255,255,255,0.06)',
-    color: '#fff',
-    cursor: 'pointer',
-    fontWeight: 900,
-    minWidth: 40,
+function ImagePicker({
+  title,
+  currentUrl,
+  onPickFile,
+  onPickLink,
+}: {
+  title: string;
+  currentUrl: string;
+  onPickFile: (file: File) => void;
+  onPickLink: (url: string) => void;
+}) {
+  const [link, setLink] = useState("");
+
+  return (
+    <div className="rounded-3xl border border-white/10 bg-white/5 p-4">
+      <div className="text-sm font-semibold">{title}</div>
+
+      <div className="mt-3 flex items-center gap-3">
+        <div className="h-12 w-12 overflow-hidden rounded-2xl border border-white/10 bg-black/20">
+          {currentUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={currentUrl} alt={title} className="h-full w-full object-cover" />
+          ) : (
+            <div className="flex h-full items-center justify-center text-[10px] text-white/40">нет</div>
+          )}
+        </div>
+
+        <label className="cursor-pointer rounded-2xl border border-white/15 bg-black px-4 py-2 text-sm hover:bg-white/10">
+          Загрузить файл
+          <input
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) onPickFile(f);
+            }}
+          />
+        </label>
+      </div>
+
+      <div className="mt-3">
+        <div className="mb-2 text-xs text-white/60">Или вставь ссылку</div>
+        <div className="flex gap-2">
+          <input
+            className="h-10 w-full rounded-2xl border border-white/15 bg-black/20 px-3 text-sm outline-none"
+            value={link}
+            onChange={(e) => setLink(e.target.value)}
+            placeholder="https://..."
+          />
+          <button
+            type="button"
+            className="rounded-2xl bg-white px-4 text-sm font-semibold text-black hover:opacity-90"
+            onClick={() => {
+              if (!link.trim()) return;
+              onPickLink(link.trim());
+              setLink("");
+            }}
+          >
+            Ок
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------- Preview ------------------------- */
+
+function BlockPreview({ block }: { block: TaplinkBlock }) {
+  const d = block.data ?? {};
+
+  if (block.type === "text") {
+    const style = d?.style ?? {};
+    const align: Align = style?.align ?? "center";
+
+    return (
+      <div
+        style={{
+          color: style?.color ?? "#ffffff",
+          fontSize: style?.fontSize ?? "16px",
+          fontWeight: style?.fontWeight ?? "400",
+          fontFamily: style?.fontFamily ?? "inherit",
+          textAlign: align,
+          whiteSpace: "pre-wrap",
+        }}
+        className="text-sm"
+      >
+        {d?.text ?? "Текст"}
+      </div>
+    );
   }
-}
 
-// ✅ чтобы в выпадашке варианты было видно — делаем "светлые" option через native CSS невозможно идеально,
-// но: ставим светлый фон и тёмный текст у самого select (тогда список становится читаемым в большинстве браузеров).
-const tbSelectStyle: React.CSSProperties = {
-  padding: '8px 10px',
-  borderRadius: 10,
-  border: '1px solid rgba(255,255,255,0.14)',
-  background: '#f2f2f2',
-  color: '#111',
-  outline: 'none',
-  cursor: 'pointer',
-}
-
-function chipBtn(active: boolean): React.CSSProperties {
-  return {
-    padding: '10px 12px',
-    borderRadius: 12,
-    border: '1px solid rgba(255,255,255,0.12)',
-    background: active ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.06)',
-    color: '#fff',
-    cursor: 'pointer',
-    fontSize: 12,
+  if (block.type === "button") {
+    return (
+      <a
+        href={d?.url ?? "#"}
+        className="flex h-11 items-center justify-center rounded-2xl bg-white text-sm font-semibold text-black hover:opacity-90"
+      >
+        {d?.label ?? "Кнопка"}
+      </a>
+    );
   }
-}
 
-const ghostBtn: React.CSSProperties = {
-  padding: '10px 12px',
-  borderRadius: 12,
-  border: '1px solid rgba(255,255,255,0.16)',
-  background: 'rgba(255,255,255,0.06)',
-  color: 'rgba(255,255,255,0.9)',
-  cursor: 'pointer',
-}
-
-const dangerBtn: React.CSSProperties = {
-  padding: '10px 12px',
-  borderRadius: 12,
-  border: '1px solid rgba(255,80,80,0.45)',
-  background: 'rgba(255,80,80,0.08)',
-  color: 'rgba(255,170,170,0.95)',
-  cursor: 'pointer',
-}
-
-function primaryBtn(disabled: boolean): React.CSSProperties {
-  return {
-    padding: '12px 16px',
-    borderRadius: 12,
-    border: 'none',
-    background: disabled ? '#1f4fb8' : '#2563eb',
-    color: '#fff',
-    fontWeight: 700,
-    cursor: disabled ? 'default' : 'pointer',
-    opacity: disabled ? 0.85 : 1,
+  if (block.type === "divider") {
+    return <div className="h-px bg-white/15" />;
   }
-}
 
-function stripHtml(html: string) {
-  return html.replace(/<[^>]*>/g, '')
-}
+  if (block.type === "image") {
+    return <div className="h-28 rounded-2xl border border-white/10 bg-white/5" />;
+  }
 
-function escapeToHtml(text: string) {
-  return text
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#039;')
-    .replaceAll('\n', '<br/>')
+  if (block.type === "map") {
+    return <div className="h-24 rounded-2xl border border-white/10 bg-white/5" />;
+  }
+
+  return null;
 }
